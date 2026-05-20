@@ -12,7 +12,6 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Функция преобразования маски в CIDR
 mask_to_cidr() {
     local mask=$1
     if [[ "$mask" =~ ^[0-9]+$ ]]; then
@@ -36,6 +35,33 @@ interface_exists() {
     ip link show "$1" &>/dev/null
 }
 
+# Функция настройки интерфейса с созданием профиля при необходимости
+configure_interface() {
+    local iface=$1
+    local desc=$2
+    echo "--- Настройка $desc ($iface) ---"
+    read -p "IP-адрес для $iface: " ip_addr
+    read -p "Маска (CIDR, например 24): " mask
+    cidr=$(mask_to_cidr "$mask")
+    if [[ "$cidr" == "0" ]]; then
+        echo "Неверная маска"
+        exit 1
+    fi
+    read -p "Шлюз по умолчанию (если есть, иначе пусто): " gateway
+    read -p "DNS-серверы (через пробел): " dns_servers
+
+    # Создаём профиль, если его нет
+    if ! nmcli con show "$iface" &>/dev/null; then
+        nmcli con add type ethernet ifname "$iface" con-name "$iface"
+    fi
+
+    nmcli con mod "$iface" ipv4.addresses "${ip_addr}/${cidr}" ipv4.method manual
+    [ -n "$gateway" ] && nmcli con mod "$iface" ipv4.gateway "$gateway"
+    [ -n "$dns_servers" ] && nmcli con mod "$iface" ipv4.dns "$dns_servers"
+    nmcli con up "$iface"
+    echo "✅ $iface настроен"
+}
+
 echo "============================================="
 echo "  Настройка маршрутизатора HQ-RTR"
 echo "============================================="
@@ -48,25 +74,10 @@ if [ -n "$NEW_HOSTNAME" ]; then
     echo "✅ Hostname: $NEW_HOSTNAME"
 fi
 
-# 2. Настройка ens192 (IP, маска, шлюз, DNS)
-echo "--- Настройка ens192 ---"
-read -p "IP-адрес для ens192: " IP_ENS192
-read -p "Маска (CIDR, например 24): " MASK_ENS192
-CIDR_ENS192=$(mask_to_cidr "$MASK_ENS192")
-if [[ "$CIDR_ENS192" == "0" ]]; then
-    echo "Неверная маска"
-    exit 1
-fi
-read -p "Шлюз по умолчанию (если есть, иначе пусто): " GW_ENS192
-read -p "DNS-серверы (через пробел, например 8.8.8.8): " DNS_ENS192
+# 2. Настройка ens192 (создаст профиль)
+configure_interface "ens192" "интерфейса ens192"
 
-nmcli con mod ens192 ipv4.addresses "${IP_ENS192}/${CIDR_ENS192}" ipv4.method manual
-[ -n "$GW_ENS192" ] && nmcli con mod ens192 ipv4.gateway "$GW_ENS192"
-[ -n "$DNS_ENS192" ] && nmcli con mod ens192 ipv4.dns "$DNS_ENS192"
-nmcli con up ens192
-echo "✅ ens192 настроен"
-
-# 3. Проверка наличия ens160
+# 3. Проверка наличия ens160 (не настраиваем его, только используем)
 if ! interface_exists "ens160"; then
     echo "Интерфейс ens160 не найден. VLAN и туннель невозможны."
     exit 1
@@ -143,7 +154,6 @@ systemctl enable --now frr
 echo "✅ FRR установлен, ospfd включён"
 
 # 10. Настройка OSPF через vtysh
-# Собираем сети для анонса: ens192 (если есть IP), все VLAN, туннель
 networks_to_add=()
 # ens192
 ip_cidr_ens192=$(nmcli -g ipv4.addresses con show ens192 | head -1)
@@ -166,7 +176,6 @@ networks_to_add+=("10.0.0.0/30 area 0")
 read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
 echo ""
 
-# Формируем команды vtysh
 vtysh_cmds=(
     "configure terminal"
     "router ospf"
@@ -188,12 +197,12 @@ vtysh_cmds+=(
     "write"
 )
 
-# Выполняем
 for cmd in "${vtysh_cmds[@]}"; do
     vtysh -c "$cmd"
 done
 
 echo "✅ OSPF настроен, конфигурация сохранена"
+
 echo "============================================="
 echo "  Настройка HQ-RTR завершена!"
 echo "  Имя хоста: $(hostname)"
