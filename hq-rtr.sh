@@ -2,7 +2,7 @@
 
 # =====================================================
 # Настройка маршрутизатора HQ-RTR (RedOS)
-# Только ens192 + три VLAN + GRE туннель + FRR/OSPF
+# Только три VLAN на ens160 + GRE туннель + FRR/OSPF
 # =====================================================
 
 set -e
@@ -35,33 +35,6 @@ interface_exists() {
     ip link show "$1" &>/dev/null
 }
 
-# Функция настройки интерфейса с созданием профиля при необходимости
-configure_interface() {
-    local iface=$1
-    local desc=$2
-    echo "--- Настройка $desc ($iface) ---"
-    read -p "IP-адрес для $iface: " ip_addr
-    read -p "Маска (CIDR, например 24): " mask
-    cidr=$(mask_to_cidr "$mask")
-    if [[ "$cidr" == "0" ]]; then
-        echo "Неверная маска"
-        exit 1
-    fi
-    read -p "Шлюз по умолчанию (если есть, иначе пусто): " gateway
-    read -p "DNS-серверы (через пробел): " dns_servers
-
-    # Создаём профиль, если его нет
-    if ! nmcli con show "$iface" &>/dev/null; then
-        nmcli con add type ethernet ifname "$iface" con-name "$iface"
-    fi
-
-    nmcli con mod "$iface" ipv4.addresses "${ip_addr}/${cidr}" ipv4.method manual
-    [ -n "$gateway" ] && nmcli con mod "$iface" ipv4.gateway "$gateway"
-    [ -n "$dns_servers" ] && nmcli con mod "$iface" ipv4.dns "$dns_servers"
-    nmcli con up "$iface"
-    echo "✅ $iface настроен"
-}
-
 echo "============================================="
 echo "  Настройка маршрутизатора HQ-RTR"
 echo "============================================="
@@ -74,20 +47,17 @@ if [ -n "$NEW_HOSTNAME" ]; then
     echo "✅ Hostname: $NEW_HOSTNAME"
 fi
 
-# 2. Настройка ens192 (создаст профиль)
-configure_interface "ens192" "интерфейса ens192"
-
-# 3. Проверка наличия ens160 (не настраиваем его, только используем)
+# 2. Проверка наличия ens160 (родительский интерфейс для VLAN и туннеля)
 if ! interface_exists "ens160"; then
     echo "Интерфейс ens160 не найден. VLAN и туннель невозможны."
     exit 1
 fi
 
-# 4. Создание трёх VLAN на ens160
+# 3. Создание трёх VLAN на ens160
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
     read -p "Введите ID для VLAN $i (число): " vlan_id
-    read -p "Введите маску для сети 192.168.$i.1 (CIDR): " mask_vlan
+    read -p "Введите маску для сети 192.168.$i.1 (CIDR, например 24): " mask_vlan
     cidr_vlan=$(mask_to_cidr "$mask_vlan")
     if [[ "$cidr_vlan" == "0" ]]; then
         echo "Неверная маска"
@@ -102,18 +72,18 @@ for i in 1 2 3; do
     echo "✅ VLAN $vlan_iface создан"
 done
 
-# 5. Часовой пояс
+# 4. Часовой пояс
 timedatectl set-timezone Europe/Moscow
 echo "→ Часовой пояс Europe/Moscow"
 
-# 6. IP-форвардинг
+# 5. IP-форвардинг
 if ! grep -q "^net.ipv4.ip_forward = 1" /etc/sysctl.conf; then
     echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
 fi
 sysctl -p
 echo "→ IP-форвардинг включён"
 
-# 7. nftables (masquerade через ens160)
+# 6. nftables (masquerade через ens160)
 if ! command -v nft &> /dev/null; then
     dnf install -y nftables
 fi
@@ -137,7 +107,7 @@ else
     exit 1
 fi
 
-# 8. GRE туннель tun1
+# 7. GRE туннель tun1
 echo "--- Настройка GRE туннеля tun1 ---"
 read -p "Локальный IP (адрес на ens160 для туннеля): " local_ip
 read -p "Удалённый IP (адрес другого конца туннеля): " remote_ip
@@ -147,21 +117,15 @@ nmcli connection modify tun1 ip-tunnel.ttl 64
 nmcli connection up tun1
 echo "✅ Туннель tun1 создан (10.0.0.1/30)"
 
-# 9. Установка FRR и включение ospfd
+# 8. Установка FRR и включение ospfd
 dnf install -y frr
 sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
 systemctl enable --now frr
 echo "✅ FRR установлен, ospfd включён"
 
-# 10. Настройка OSPF через vtysh
+# 9. Настройка OSPF через vtysh
 networks_to_add=()
-# ens192
-ip_cidr_ens192=$(nmcli -g ipv4.addresses con show ens192 | head -1)
-if [ -n "$ip_cidr_ens192" ]; then
-    network_ens192=$(ipcalc -n "$ip_cidr_ens192" | grep Network | awk '{print $2}')
-    [ -n "$network_ens192" ] && networks_to_add+=("$network_ens192 area 0")
-fi
-# VLAN
+# Добавляем сети VLAN (192.168.1.0/маска, 192.168.2.0/маска, 192.168.3.0/маска)
 for i in 1 2 3; do
     vlan_iface=$(nmcli -t -f NAME con show --active | grep "ens160\." | head -$i | tail -1)
     if [ -n "$vlan_iface" ]; then
@@ -170,7 +134,7 @@ for i in 1 2 3; do
         [ -n "$network_vlan" ] && networks_to_add+=("$network_vlan area 0")
     fi
 done
-# туннель
+# Добавляем туннельную сеть
 networks_to_add+=("10.0.0.0/30 area 0")
 
 read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
