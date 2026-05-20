@@ -47,11 +47,14 @@ if [ -n "$NEW_HOSTNAME" ]; then
     echo "✅ Hostname: $NEW_HOSTNAME"
 fi
 
-# 2. Проверка наличия ens160 (родительский интерфейс для VLAN и туннеля)
+# 2. Проверка наличия ens160
 if ! interface_exists "ens160"; then
     echo "Интерфейс ens160 не найден. VLAN и туннель невозможны."
     exit 1
 fi
+
+# Массив для хранения сетей VLAN
+vlan_networks=()
 
 # 3. Создание трёх VLAN на ens160
 for i in 1 2 3; do
@@ -65,11 +68,15 @@ for i in 1 2 3; do
     fi
     vlan_iface="ens160.$vlan_id"
     ip_addr="192.168.$i.1/$cidr_vlan"
-    echo "→ Создаём $vlan_iface с IP $ip_addr"
-    nmcli con add type vlan ifname "$vlan_iface" dev ens160 id "$vlan_id"
+    echo "→ Создаём профиль $vlan_iface с IP $ip_addr"
+    # Создаём VLAN с именем подключения = имени интерфейса
+    nmcli con add type vlan ifname "$vlan_iface" dev ens160 id "$vlan_id" con-name "$vlan_iface"
     nmcli con mod "$vlan_iface" ipv4.addresses "$ip_addr" ipv4.method manual
     nmcli con up "$vlan_iface"
     echo "✅ VLAN $vlan_iface создан"
+    # Вычисляем сеть для OSPF
+    network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
+    [ -n "$network" ] && vlan_networks+=("$network area 0")
 done
 
 # 4. Часовой пояс
@@ -125,15 +132,8 @@ echo "✅ FRR установлен, ospfd включён"
 
 # 9. Настройка OSPF через vtysh
 networks_to_add=()
-# Добавляем сети VLAN (192.168.1.0/маска, 192.168.2.0/маска, 192.168.3.0/маска)
-for i in 1 2 3; do
-    vlan_iface=$(nmcli -t -f NAME con show --active | grep "ens160\." | head -$i | tail -1)
-    if [ -n "$vlan_iface" ]; then
-        ip_cidr_vlan=$(nmcli -g ipv4.addresses con show "$vlan_iface")
-        network_vlan=$(ipcalc -n "$ip_cidr_vlan" | grep Network | awk '{print $2}')
-        [ -n "$network_vlan" ] && networks_to_add+=("$network_vlan area 0")
-    fi
-done
+# Добавляем сети VLAN
+networks_to_add+=("${vlan_networks[@]}")
 # Добавляем туннельную сеть
 networks_to_add+=("10.0.0.0/30 area 0")
 
