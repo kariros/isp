@@ -2,7 +2,7 @@
 
 # =====================================================
 # Настройка маршрутизатора HQ-RTR (RedOS)
-# Туннель через ip tunnel, без NetworkManager
+# Туннель через ip tunnel, OSPF через единый vtysh
 # =====================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -159,7 +159,7 @@ if ! pgrep -x "ospfd" > /dev/null; then
     sleep 5
 fi
 
-# --- OSPF ---
+# --- OSPF (единый вызов vtysh) ---
 echo "--- Настройка OSPF ---"
 echo "Введите сети в формате '<сеть/маска> area 0' (например, 10.0.0.0/30 area 0)"
 echo "Когда закончите, оставьте строку пустой и нажмите Enter."
@@ -177,22 +177,30 @@ else
     read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
     echo ""
 
-    vtysh -c "configure terminal"
-    vtysh -c "router ospf"
-    vtysh -c "passive-interface default"
+    # Формируем список команд
+    cmds=(
+        "configure terminal"
+        "router ospf"
+        "passive-interface default"
+    )
     for net in "${networks_to_add[@]}"; do
-        vtysh -c "network $net"
+        cmds+=("network $net")
     done
-    vtysh -c "area 0 authentication"
-    vtysh -c "exit"
-    vtysh -c "interface tun1"
-    vtysh -c "no ip ospf network broadcast"
-    vtysh -c "no ip ospf passive"
-    vtysh -c "ip ospf authentication"
-    vtysh -c "ip ospf authentication-key $ospf_password"
-    vtysh -c "exit"
-    vtysh -c "exit"
-    vtysh -c "write"
+    cmds+=(
+        "area 0 authentication"
+        "exit"
+        "interface tun1"
+        "no ip ospf network broadcast"
+        "no ip ospf passive"
+        "ip ospf authentication"
+        "ip ospf authentication-key $ospf_password"
+        "exit"
+        "exit"
+        "write"
+    )
+
+    # Передаём команды в vtysh через printf
+    printf "%s\n" "${cmds[@]}" | vtysh
 
     echo "✅ OSPF настроен"
 fi
