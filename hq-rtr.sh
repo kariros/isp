@@ -2,16 +2,14 @@
 
 # =====================================================
 # Настройка маршрутизатора HQ-RTR (RedOS)
-# Туннель через ip tunnel, OSPF через vtysh
+# Туннель через ip tunnel, без NetworkManager
 # =====================================================
 
-# Проверка прав root
 if [ "$EUID" -ne 0 ]; then
     echo "Запустите с правами root (sudo ./hq-rtr.sh)"
     exit 1
 fi
 
-# Функция преобразования маски в CIDR
 mask_to_cidr() {
     local mask=$1
     if [[ "$mask" =~ ^[0-9]+$ ]]; then
@@ -31,90 +29,67 @@ mask_to_cidr() {
     fi
 }
 
-# Функция проверки существования интерфейса
 interface_exists() {
     ip link show "$1" &>/dev/null
 }
 
-# Функция поиска родительского интерфейса по IP
 find_parent_interface_by_ip() {
-    local target_ip="172.16.1.2"
-    local iface=$(ip -4 addr show | grep -B2 "inet $target_ip" | grep '^[0-9]*:' | awk -F': ' '{print $2}')
-    echo "$iface"
+    ip -4 addr show | grep -B2 "inet 172.16.1.2" | grep '^[0-9]*:' | awk -F': ' '{print $2}'
 }
 
 echo "============================================="
 echo "  Настройка маршрутизатора HQ-RTR"
 echo "============================================="
 
-# --- 1. Имя хоста ---
+# Имя хоста
 read -p "Введите имя хоста (например, HQ-RTR): " NEW_HOSTNAME
-if [ -n "$NEW_HOSTNAME" ]; then
-    hostnamectl set-hostname "$NEW_HOSTNAME"
-    hostname "$NEW_HOSTNAME"
-    echo "✅ Hostname: $NEW_HOSTNAME"
-fi
+[ -n "$NEW_HOSTNAME" ] && hostnamectl set-hostname "$NEW_HOSTNAME" && hostname "$NEW_HOSTNAME"
+echo "✅ Hostname: $(hostname)"
 
-# --- 2. Определение родительского интерфейса ---
+# Родительский интерфейс
 PARENT_IF=$(find_parent_interface_by_ip)
 if [ -z "$PARENT_IF" ]; then
-    echo "⚠️ Не удалось автоматически найти интерфейс с IP 172.16.1.2."
     read -p "Введите имя родительского интерфейса (например, ens160): " PARENT_IF
     if ! interface_exists "$PARENT_IF"; then
-        echo "❌ Интерфейс $PARENT_IF не найден. Доступные:"
-        ip -br link | awk '{print $1}'
+        echo "❌ Интерфейс $PARENT_IF не найден"
         exit 1
     fi
 fi
 echo "✅ Родительский интерфейс: $PARENT_IF"
 
-# --- 3. Создание трёх VLAN (если ещё не созданы) ---
+# VLAN
 vlan_networks=()
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
-    read -p "Введите ID для VLAN $i (число): " vlan_id
+    read -p "Введите ID для VLAN $i: " vlan_id
     vlan_iface="$PARENT_IF.$vlan_id"
     if nmcli con show "$vlan_iface" &>/dev/null; then
-        echo "⚠️ Профиль $vlan_iface уже существует. Пропускаем."
-        # Получаем сеть из существующего интерфейса
+        echo "⚠️ Профиль $vlan_iface уже существует"
         ip_addr=$(nmcli -g ipv4.addresses con show "$vlan_iface" | head -1)
-        if [ -n "$ip_addr" ]; then
-            network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
-            [ -n "$network" ] && vlan_networks+=("$network area 0")
-        fi
     else
-        read -p "Введите маску для сети 192.168.$i.1 (CIDR или точечная): " mask_vlan
-        cidr_vlan=$(mask_to_cidr "$mask_vlan")
-        if [[ "$cidr_vlan" == "0" ]]; then
-            echo "❌ Неверная маска"
-            exit 1
-        fi
-        ip_addr="192.168.$i.1/$cidr_vlan"
-        echo "→ Создаём $vlan_iface с IP $ip_addr"
+        read -p "Введите маску для сети 192.168.$i.1 (CIDR): " mask_vlan
+        cidr=$(mask_to_cidr "$mask_vlan")
+        ip_addr="192.168.$i.1/$cidr"
         nmcli con add type vlan ifname "$vlan_iface" dev "$PARENT_IF" id "$vlan_id" con-name "$vlan_iface"
         nmcli con mod "$vlan_iface" ipv4.addresses "$ip_addr" ipv4.method manual
         nmcli con up "$vlan_iface"
         echo "✅ VLAN $vlan_iface создан"
-        network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
-        [ -n "$network" ] && vlan_networks+=("$network area 0")
     fi
+    network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
+    [ -n "$network" ] && vlan_networks+=("$network area 0")
 done
 
-# --- 4. Часовой пояс ---
+# Часовой пояс
 timedatectl set-timezone Europe/Moscow
 echo "✅ Часовой пояс: Europe/Moscow"
 
-# --- 5. IP-форвардинг ---
-if ! grep -q "^net.ipv4.ip_forward = 1" /etc/sysctl.conf; then
-    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
-fi
+# IP-форвардинг
+grep -q "^net.ipv4.ip_forward = 1" /etc/sysctl.conf || echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
 sysctl -p
 echo "✅ IP-форвардинг включён"
 
-# --- 6. nftables (masquerade) ---
-if ! command -v nft &> /dev/null; then
-    dnf install -y nftables
-fi
+# nftables
+command -v nft &>/dev/null || dnf install -y nftables
 mkdir -p /etc/nftables
 cat > /etc/nftables/hq.nft <<EOF
 table inet nat {
@@ -135,7 +110,7 @@ else
     exit 1
 fi
 
-# --- 7. GRE туннель tun1 (через ip tunnel, без NetworkManager) ---
+# --- GRE туннель через ip (без NetworkManager) ---
 echo "--- Настройка GRE туннеля tun1 ---"
 # Удаляем старый профиль NetworkManager, если есть
 nmcli con del tun1 2>/dev/null
@@ -156,18 +131,15 @@ ip tunnel add tun1 mode gre remote "$remote_ip" local "$local_ip" ttl 64
 ip link set tun1 up
 ip addr add 10.0.0.1/30 dev tun1
 
-# Проверяем
 if ip link show tun1 &>/dev/null; then
-    echo "✅ Туннель tun1 создан и активирован через ip tunnel"
+    echo "✅ Туннель tun1 создан и активирован"
 else
     echo "❌ Не удалось создать туннель"
     exit 1
 fi
 
-# --- 8. Установка и настройка FRR ---
-if ! command -v frr &>/dev/null; then
-    dnf install -y frr
-fi
+# --- FRR ---
+command -v frr &>/dev/null || dnf install -y frr
 sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
 systemctl enable --now frr
 
@@ -187,7 +159,7 @@ if ! pgrep -x "ospfd" > /dev/null; then
     sleep 5
 fi
 
-# --- 9. Настройка OSPF (ручной ввод сетей, построчная отправка) ---
+# --- OSPF ---
 echo "--- Настройка OSPF ---"
 echo "Введите сети в формате '<сеть/маска> area 0' (например, 10.0.0.0/30 area 0)"
 echo "Когда закончите, оставьте строку пустой и нажмите Enter."
@@ -195,9 +167,7 @@ echo "Когда закончите, оставьте строку пустой 
 networks_to_add=()
 while true; do
     read -p "Сеть: " net
-    if [ -z "$net" ]; then
-        break
-    fi
+    [ -z "$net" ] && break
     networks_to_add+=("$net")
 done
 
@@ -207,7 +177,6 @@ else
     read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
     echo ""
 
-    # Отправляем команды в vtysh построчно
     vtysh -c "configure terminal"
     vtysh -c "router ospf"
     vtysh -c "passive-interface default"
