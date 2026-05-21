@@ -2,7 +2,7 @@
 
 # =====================================================
 # Настройка маршрутизатора HQ-RTR (RedOS)
-# Три VLAN на ens160 + GRE туннель + FRR/OSPF с ручным вводом сетей
+# VLAN + GRE туннель + FRR/OSPF
 # =====================================================
 
 set -e
@@ -12,6 +12,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Функция преобразования маски в CIDR
 mask_to_cidr() {
     local mask=$1
     if [[ "$mask" =~ ^[0-9]+$ ]]; then
@@ -31,8 +32,17 @@ mask_to_cidr() {
     fi
 }
 
+# Проверка существования интерфейса
 interface_exists() {
     ip link show "$1" &>/dev/null
+}
+
+# Загрузка модуля GRE
+load_gre_module() {
+    if ! lsmod | grep -q ip_gre; then
+        echo "→ Загружаем модуль ip_gre"
+        modprobe ip_gre
+    fi
 }
 
 echo "============================================="
@@ -47,29 +57,41 @@ if [ -n "$NEW_HOSTNAME" ]; then
     echo "✅ Hostname: $NEW_HOSTNAME"
 fi
 
-# 2. Проверка наличия ens160
-if ! interface_exists "ens160"; then
-    echo "Интерфейс ens160 не найден. VLAN и туннель невозможны."
+# 2. Родительский интерфейс для VLAN и туннеля
+read -p "Введите имя родительского интерфейса (например, ens160): " PARENT_IF
+if ! interface_exists "$PARENT_IF"; then
+    echo "Интерфейс $PARENT_IF не найден. Доступные:"
+    ip -br link | awk '{print $1}'
     exit 1
 fi
+echo "→ Родительский интерфейс: $PARENT_IF"
 
-# 3. Создание трёх VLAN на ens160 (запрашиваем ID и маску)
+# 3. Создание трёх VLAN (если ещё не созданы)
+vlan_networks=()
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
     read -p "Введите ID для VLAN $i (число): " vlan_id
-    read -p "Введите маску для сети 192.168.$i.1 (CIDR, например 24): " mask_vlan
-    cidr_vlan=$(mask_to_cidr "$mask_vlan")
-    if [[ "$cidr_vlan" == "0" ]]; then
-        echo "Неверная маска"
-        exit 1
+    vlan_iface="$PARENT_IF.$vlan_id"
+    # Проверяем, существует ли уже профиль
+    if nmcli con show "$vlan_iface" &>/dev/null; then
+        echo "⚠️ Профиль $vlan_iface уже существует. Пропускаем создание."
+    else
+        read -p "Введите маску для сети 192.168.$i.1 (CIDR, например 24): " mask_vlan
+        cidr_vlan=$(mask_to_cidr "$mask_vlan")
+        if [[ "$cidr_vlan" == "0" ]]; then
+            echo "Неверная маска"
+            exit 1
+        fi
+        ip_addr="192.168.$i.1/$cidr_vlan"
+        echo "→ Создаём $vlan_iface с IP $ip_addr"
+        nmcli con add type vlan ifname "$vlan_iface" dev "$PARENT_IF" id "$vlan_id" con-name "$vlan_iface"
+        nmcli con mod "$vlan_iface" ipv4.addresses "$ip_addr" ipv4.method manual
+        nmcli con up "$vlan_iface"
+        echo "✅ VLAN $vlan_iface создан"
+        # Сохраняем сеть для OSPF
+        network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
+        [ -n "$network" ] && vlan_networks+=("$network area 0")
     fi
-    vlan_iface="ens160.$vlan_id"
-    ip_addr="192.168.$i.1/$cidr_vlan"
-    echo "→ Создаём профиль $vlan_iface с IP $ip_addr"
-    nmcli con add type vlan ifname "$vlan_iface" dev ens160 id "$vlan_id" con-name "$vlan_iface"
-    nmcli con mod "$vlan_iface" ipv4.addresses "$ip_addr" ipv4.method manual
-    nmcli con up "$vlan_iface"
-    echo "✅ VLAN $vlan_iface создан"
 done
 
 # 4. Часовой пояс
@@ -83,7 +105,7 @@ fi
 sysctl -p
 echo "→ IP-форвардинг включён"
 
-# 6. nftables (masquerade через ens160)
+# 6. nftables (masquerade через родительский интерфейс)
 if ! command -v nft &> /dev/null; then
     dnf install -y nftables
 fi
@@ -92,7 +114,7 @@ cat > /etc/nftables/hq.nft <<EOF
 table inet nat {
     chain POSTROUTING {
         type nat hook postrouting priority srcnat;
-        oifname "ens160" masquerade
+        oifname "$PARENT_IF" masquerade
     }
 }
 EOF
@@ -107,70 +129,92 @@ else
     exit 1
 fi
 
-# 7. GRE туннель tun1
+# 7. GRE туннель tun1 (с проверкой существования и повторной активацией)
 echo "--- Настройка GRE туннеля tun1 ---"
-read -p "Локальный IP (адрес на ens160 для туннеля): " local_ip
-read -p "Удалённый IP (адрес другого конца туннеля): " remote_ip
-nmcli connection add type ip-tunnel ip-tunnel.mode gre con-name tun1 ifname tun1 remote "$remote_ip" local "$local_ip" dev ens160
-nmcli connection modify tun1 ipv4.addresses 10.0.0.1/30 ipv4.method manual
-nmcli connection modify tun1 ip-tunnel.ttl 64
-nmcli connection up tun1
-echo "✅ Туннель tun1 создан (10.0.0.1/30)"
+load_gre_module
+
+# Проверяем, существует ли уже подключение tun1
+if nmcli con show tun1 &>/dev/null; then
+    echo "⚠️ Профиль туннеля tun1 уже существует. Используем его."
+else
+    read -p "Локальный IP (адрес на $PARENT_IF для туннеля): " local_ip
+    read -p "Удалённый IP (адрес другого конца туннеля): " remote_ip
+    echo "→ Создаём туннель tun1"
+    nmcli connection add type ip-tunnel ip-tunnel.mode gre con-name tun1 ifname tun1 remote "$remote_ip" local "$local_ip" dev "$PARENT_IF"
+    nmcli connection modify tun1 ipv4.addresses 10.0.0.1/30 ipv4.method manual
+    nmcli connection modify tun1 ip-tunnel.ttl 64
+fi
+
+# Активируем туннель (с повторной попыткой)
+for attempt in 1 2; do
+    if nmcli connection up tun1; then
+        echo "✅ Туннель tun1 активирован"
+        break
+    else
+        echo "⚠️ Попытка $attempt не удалась, ждём 2 секунды..."
+        sleep 2
+    fi
+    if [ $attempt -eq 2 ]; then
+        echo "❌ Не удалось активировать туннель. Проверьте родительский интерфейс и доступность удалённого IP."
+        exit 1
+    fi
+done
 
 # 8. Установка FRR и включение ospfd
-dnf install -y frr
+if ! command -v frr &>/dev/null; then
+    dnf install -y frr
+fi
 sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
 systemctl enable --now frr
 echo "✅ FRR установлен, ospfd включён"
 
-# 9. Интерактивный ввод сетей для OSPF
+# 9. Настройка OSPF через vtysh (ручной ввод сетей)
 echo "--- Настройка OSPF ---"
-echo "Введите сети для анонсирования в формате 'сеть/маска' (например, 10.0.0.0/30 или 192.168.1.0/24)."
-echo "После ввода всех сетей оставьте строку пустой и нажмите Enter."
-ospf_networks=()
+echo "Введите сети для анонса в формате '<сеть/маска> area 0'"
+echo "Примеры: 10.0.0.0/30 area 0  или  192.168.1.0/24 area 0"
+echo "Когда закончите, оставьте строку пустой и нажмите Enter."
+
+networks_to_add=()
 while true; do
-    read -p "Сеть (пустая строка для завершения): " net
+    read -p "Сеть: " net
     if [ -z "$net" ]; then
         break
     fi
-    # Простая проверка формата (наличие /)
-    if [[ "$net" =~ ^[0-9./]+$ ]]; then
-        ospf_networks+=("$net area 0")
-    else
-        echo "Неверный формат, используйте например 192.168.1.0/24"
-    fi
+    networks_to_add+=("$net")
 done
 
-read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
-echo ""
+if [ ${#networks_to_add[@]} -eq 0 ]; then
+    echo "Не добавлено ни одной сети. OSPF не будет настроен."
+else
+    read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
+    echo ""
 
-# 10. Применение конфигурации OSPF через vtysh
-vtysh_cmds=(
-    "configure terminal"
-    "router ospf"
-    "passive-interface default"
-)
-for net_entry in "${ospf_networks[@]}"; do
-    vtysh_cmds+=("network $net_entry")
-done
-vtysh_cmds+=(
-    "area 0 authentication"
-    "exit"
-    "interface tun1"
-    "no ip ospf network broadcast"
-    "no ip ospf passive"
-    "ip ospf authentication"
-    "ip ospf authentication-key $ospf_password"
-    "exit"
-    "exit"
-    "write"
-)
+    vtysh_cmds=(
+        "configure terminal"
+        "router ospf"
+        "passive-interface default"
+    )
+    for net in "${networks_to_add[@]}"; do
+        vtysh_cmds+=("network $net")
+    done
+    vtysh_cmds+=(
+        "area 0 authentication"
+        "exit"
+        "interface tun1"
+        "no ip ospf network broadcast"
+        "no ip ospf passive"
+        "ip ospf authentication"
+        "ip ospf authentication-key $ospf_password"
+        "exit"
+        "exit"
+        "write"
+    )
 
-for cmd in "${vtysh_cmds[@]}"; do
-    vtysh -c "$cmd"
-done
-
-echo "✅ OSPF настроен, конфигурация сохранена"
+    for cmd in "${vtysh_cmds[@]}"; do
+        vtysh -c "$cmd"
+    done
+    echo "✅ OSPF настроен, конфигурация сохранена"
+fi
 
 echo "============================================="
 echo "  Настройка HQ-RTR завершена!"
