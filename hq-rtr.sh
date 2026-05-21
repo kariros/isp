@@ -2,7 +2,7 @@
 
 # =====================================================
 # Настройка маршрутизатора HQ-RTR (RedOS)
-# Только три VLAN на ens160 + GRE туннель + FRR/OSPF
+# Три VLAN на ens160 + GRE туннель + FRR/OSPF с ручным вводом сетей
 # =====================================================
 
 set -e
@@ -53,10 +53,7 @@ if ! interface_exists "ens160"; then
     exit 1
 fi
 
-# Массив для хранения сетей VLAN
-vlan_networks=()
-
-# 3. Создание трёх VLAN на ens160
+# 3. Создание трёх VLAN на ens160 (запрашиваем ID и маску)
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
     read -p "Введите ID для VLAN $i (число): " vlan_id
@@ -69,14 +66,10 @@ for i in 1 2 3; do
     vlan_iface="ens160.$vlan_id"
     ip_addr="192.168.$i.1/$cidr_vlan"
     echo "→ Создаём профиль $vlan_iface с IP $ip_addr"
-    # Создаём VLAN с именем подключения = имени интерфейса
     nmcli con add type vlan ifname "$vlan_iface" dev ens160 id "$vlan_id" con-name "$vlan_iface"
     nmcli con mod "$vlan_iface" ipv4.addresses "$ip_addr" ipv4.method manual
     nmcli con up "$vlan_iface"
     echo "✅ VLAN $vlan_iface создан"
-    # Вычисляем сеть для OSPF
-    network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
-    [ -n "$network" ] && vlan_networks+=("$network area 0")
 done
 
 # 4. Часовой пояс
@@ -130,23 +123,35 @@ sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
 systemctl enable --now frr
 echo "✅ FRR установлен, ospfd включён"
 
-# 9. Настройка OSPF через vtysh
-networks_to_add=()
-# Добавляем сети VLAN
-networks_to_add+=("${vlan_networks[@]}")
-# Добавляем туннельную сеть
-networks_to_add+=("10.0.0.0/30 area 0")
+# 9. Интерактивный ввод сетей для OSPF
+echo "--- Настройка OSPF ---"
+echo "Введите сети для анонсирования в формате 'сеть/маска' (например, 10.0.0.0/30 или 192.168.1.0/24)."
+echo "После ввода всех сетей оставьте строку пустой и нажмите Enter."
+ospf_networks=()
+while true; do
+    read -p "Сеть (пустая строка для завершения): " net
+    if [ -z "$net" ]; then
+        break
+    fi
+    # Простая проверка формата (наличие /)
+    if [[ "$net" =~ ^[0-9./]+$ ]]; then
+        ospf_networks+=("$net area 0")
+    else
+        echo "Неверный формат, используйте например 192.168.1.0/24"
+    fi
+done
 
 read -sp "Введите пароль аутентификации OSPF (общий для обоих концов): " ospf_password
 echo ""
 
+# 10. Применение конфигурации OSPF через vtysh
 vtysh_cmds=(
     "configure terminal"
     "router ospf"
     "passive-interface default"
 )
-for net in "${networks_to_add[@]}"; do
-    vtysh_cmds+=("network $net")
+for net_entry in "${ospf_networks[@]}"; do
+    vtysh_cmds+=("network $net_entry")
 done
 vtysh_cmds+=(
     "area 0 authentication"
