@@ -15,12 +15,12 @@ echo "  Настройка сервера HQ-SRV"
 echo "============================================="
 
 # --- 1. Создание административного пользователя (с прямым добавлением в /etc/sudoers) ---
-read -p "Введите имя пользователя (администратор): " ADMIN_USER
+read -p "Введите имя пользователя (СМОТРЕТЬ В ЗАДАНИИ): " ADMIN_USER
 if [ -z "$ADMIN_USER" ]; then
     echo "Имя пользователя не может быть пустым"
     exit 1
 fi
-read -p "Введите UID для $ADMIN_USER: " ADMIN_UID
+read -p "Введите UID (СМОТРЕТЬ В ЗАДАНИИ) для $ADMIN_USER: " ADMIN_UID
 read -sp "Введите пароль для $ADMIN_USER: " ADMIN_PASS
 echo
 useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
@@ -28,7 +28,7 @@ echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 echo "✅ Пользователь $ADMIN_USER (UID $ADMIN_UID) создан"
 
 # Добавляем права sudo без пароля напрямую в /etc/sudoers
-SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL:ALL) NOPASSWD: ALL"
 if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
     echo "$SUDOERS_LINE" >> /etc/sudoers
     if visudo -c &>/dev/null; then
@@ -43,8 +43,8 @@ else
 fi
 
 # --- 2. Настройка SSH ---
-read -p "Введите порт для SSH (например, 2222): " SSH_PORT
-read -p "Введите количество попыток входа MaxAuthTries (например, 3): " SSH_TRIES
+read -p "Введите порт для SSH (например, СМОТРЕТЬ В ЗАДАНИИ): " SSH_PORT
+read -p "Введите количество попыток входа MaxAuthTries (СМОТРЕТЬ В ЗАДАНИИ например, 3): " SSH_TRIES
 
 sed -i "s/^#Port .*/Port $SSH_PORT/; s/^Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
 sed -i "s/^#MaxAuthTries .*/MaxAuthTries $SSH_TRIES/; s/^MaxAuthTries .*/MaxAuthTries $SSH_TRIES/" /etc/ssh/sshd_config
@@ -153,7 +153,7 @@ EOF
 
 echo "Теперь добавьте дополнительные A-записи (имя хоста и IP). Пустая строка для завершения."
 while true; do
-    read -p "Имя (например, www) и IP (например, $SRV_IP): " name ip
+    read -p "Имя (например, www, br-rtr и hq-rtr ) и IP (IP роутеров и например, $SRV_IP): " name ip
     [ -z "$name" ] && break
     echo "$name    IN A    $ip" >> /var/named/master/"$ZONE_NAME".db
 done
