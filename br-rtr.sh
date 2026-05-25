@@ -3,6 +3,7 @@
 # =====================================================
 # Настройка маршрутизатора BR-RTR (RedOS)
 # ens192 (внутренний) + NAT через ens160 + GRE туннель + FRR/OSPF
+# + создание административного пользователя
 # =====================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -37,12 +38,12 @@ echo "============================================="
 echo "  Настройка маршрутизатора BR-RTR"
 echo "============================================="
 
-# 1. Имя хоста
+# --- 1. Имя хоста ---
 read -p "Введите имя хоста (например, BR-RTR): " NEW_HOSTNAME
 [ -n "$NEW_HOSTNAME" ] && hostnamectl set-hostname "$NEW_HOSTNAME" && hostname "$NEW_HOSTNAME"
 echo "✅ Hostname: $(hostname)"
 
-# 2. Настройка внутреннего интерфейса ens192 (только IP и маска)
+# --- 2. Настройка внутреннего интерфейса ens192 (только IP и маска) ---
 echo "--- Настройка интерфейса ens192 ---"
 read -p "Введите IP-адрес для ens192 (например, 192.168.2.2): " IP_ENS192
 read -p "Введите маску (CIDR, например 25): " MASK_ENS192
@@ -64,19 +65,22 @@ if ! nmcli con show ens192 &>/dev/null; then
 fi
 
 nmcli con mod ens192 ipv4.addresses "${IP_ENS192}/${CIDR_ENS192}" ipv4.method manual
+# Дополнительно: требуем IPv4 и игнорируем IPv6 (как в HQ-RTR)
+nmcli con mod ens192 ipv4.may-fail no
+nmcli con mod ens192 ipv6.method ignore
 nmcli con up ens192
-echo "✅ ens192 настроен (без шлюза, только IP)"
+echo "✅ ens192 настроен (без шлюза, только IP, IPv4 required, IPv6 ignored)"
 
-# 3. Часовой пояс
+# --- 3. Часовой пояс ---
 timedatectl set-timezone Europe/Moscow
 echo "✅ Часовой пояс: Europe/Moscow"
 
-# 4. IP-форвардинг
+# --- 4. IP-форвардинг ---
 grep -q "^net.ipv4.ip_forward = 1" /etc/sysctl.conf || echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
 sysctl -p
 echo "✅ IP-форвардинг включён"
 
-# 5. nftables (masquerade через ens160)
+# --- 5. nftables (masquerade через ens160) ---
 command -v nft &>/dev/null || dnf install -y nftables
 mkdir -p /etc/nftables
 cat > /etc/nftables/br.nft <<EOF
@@ -98,7 +102,7 @@ else
     exit 1
 fi
 
-# 6. GRE туннель tun1 (через ip tunnel)
+# --- 6. GRE туннель tun1 (через ip tunnel) ---
 echo "--- Настройка GRE туннеля tun1 ---"
 nmcli con del tun1 2>/dev/null
 ip link del tun1 2>/dev/null
@@ -123,7 +127,7 @@ else
     exit 1
 fi
 
-# 7. FRR и OSPF
+# --- 7. FRR и OSPF ---
 command -v frr &>/dev/null || dnf install -y frr
 sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
 systemctl enable --now frr
@@ -143,7 +147,7 @@ if ! pgrep -x "ospfd" > /dev/null; then
     sleep 5
 fi
 
-# 8. OSPF (ручной ввод сетей)
+# --- 8. OSPF (ручной ввод сетей) ---
 echo "--- Настройка OSPF ---"
 echo "Введите сети в формате '<сеть/маска> area 0' (например, 10.0.0.0/30 area 0)"
 echo "Когда закончите, оставьте строку пустой и нажмите Enter."
@@ -186,9 +190,39 @@ else
     echo "✅ OSPF настроен"
 fi
 
+# ===================== НОВЫЙ БЛОК: СОЗДАНИЕ АДМИНИСТРАТИВНОГО ПОЛЬЗОВАТЕЛЯ =====================
+echo "--- Создание административного пользователя ---"
+read -p "Введите имя пользователя (например, net_admin): " ADMIN_USER
+if [ -z "$ADMIN_USER" ]; then
+    ADMIN_USER="net_admin"
+fi
+read -p "Введите UID для пользователя $ADMIN_USER: " ADMIN_UID
+read -sp "Введите пароль для $ADMIN_USER: " ADMIN_PASS
+echo
+useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
+echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
+
+# Добавляем строку в /etc/sudoers (напрямую, с проверкой синтаксиса)
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
+    echo "$SUDOERS_LINE" >> /etc/sudoers
+    if visudo -c &>/dev/null; then
+        echo "✅ Права sudo NOPASSWD добавлены в /etc/sudoers для $ADMIN_USER"
+    else
+        # Откатываем изменение
+        sed -i "\$d" /etc/sudoers
+        echo "❌ Ошибка синтаксиса sudoers. Права не добавлены."
+        exit 1
+    fi
+else
+    echo "⚠️ Запись для $ADMIN_USER уже существует в /etc/sudoers"
+fi
+# ============================================================================
+
 echo "============================================="
 echo "  Настройка BR-RTR завершена!"
 echo "  Имя хоста: $(hostname)"
 echo "  Туннель tun1: $tunnel_ip"
+echo "  Создан администратор: $ADMIN_USER (UID $ADMIN_UID, sudo без пароля)"
 echo "  Проверьте OSPF: vtysh -c 'show ip ospf neighbor'"
 echo "============================================="
