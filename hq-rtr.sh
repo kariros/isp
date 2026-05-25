@@ -92,7 +92,7 @@ grep -q "^net.ipv4.ip_forward = 1" /etc/sysctl.conf || echo "net.ipv4.ip_forward
 sysctl -p
 echo "✅ IP-форвардинг включён"
 
-# --- nftables ---
+# --- nftables ---   
 command -v nft &>/dev/null || dnf install -y nftables
 mkdir -p /etc/nftables
 cat > /etc/nftables/hq.nft <<EOF
@@ -193,7 +193,7 @@ fi
 
 # ===================== НОВЫЕ БЛОКИ =====================
 
-# --- Создание административного пользователя (с UID и sudo без пароля) ---
+# --- Создание административного пользователя и добавление в /etc/sudoers ---
 echo "--- Создание административного пользователя ---"
 read -p "Введите имя пользователя (например, net_admin): " ADMIN_USER
 if [ -z "$ADMIN_USER" ]; then
@@ -204,10 +204,24 @@ read -sp "Введите пароль для $ADMIN_USER: " ADMIN_PASS
 echo
 useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
 echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
-# Добавляем права sudo без пароля через отдельный файл (эквивалентно visudo)
-echo "$ADMIN_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/"$ADMIN_USER"
-chmod 440 /etc/sudoers.d/"$ADMIN_USER"
-echo "✅ Пользователь $ADMIN_USER (UID $ADMIN_UID) создан и добавлен в sudoers (NOPASSWD)"
+
+# Добавляем строку в /etc/sudoers, если её ещё нет
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
+    # Временно добавляем строку в конец файла
+    echo "$SUDOERS_LINE" >> /etc/sudoers
+    # Проверяем синтаксис sudoers
+    if visudo -c &>/dev/null; then
+        echo "✅ Права sudo NOPASSWD добавлены в /etc/sudoers для $ADMIN_USER"
+    else
+        # Если синтаксис ошибочен, откатываем изменение
+        sed -i "\$d" /etc/sudoers
+        echo "❌ Ошибка синтаксиса sudoers. Права не добавлены."
+        exit 1
+    fi
+else
+    echo "⚠️ Запись для $ADMIN_USER уже существует в /etc/sudoers"
+fi
 
 # --- Настройка DHCP-сервера для HQ-CLI ---
 echo "--- Установка и настройка DHCP-сервера ---"
@@ -219,8 +233,8 @@ read -p "IP-сеть (например, 192.168.2.0): " dhcp_subnet
 read -p "Маска сети (например, 255.255.255.240): " dhcp_netmask
 read -p "Диапазон IP (начало, например 192.168.2.2): " dhcp_range_start
 read -p "Диапазон IP (конец, например 192.168.2.5): " dhcp_range_end
-read -p "DNS-серверы (через запятую, например 172.16.1.2,8.8.8.8): " dhcp_dns
-read -p "Доменное имя (например, au-team.irpo): " dhcp_domain
+read -p "DNS-серверы (через запятую, например 172.16.1.2, 8.8.8.8): " dhcp_dns
+read -p "Доменное имя (например, au-team.irpo или написано в задании): " dhcp_domain
 read -p "Шлюз (маршрутизатор, например 192.168.2.1): " dhcp_router
 read -p "Время аренды по умолчанию (сек, например 600): " dhcp_default_lease
 read -p "Максимальное время аренды (сек, например 7200): " dhcp_max_lease
