@@ -76,16 +76,16 @@ echo "→ Внешний интерфейс: $EXT_IF (задан по умолч
 
 # Запрос внутренних интерфейсов и их IP
 INNER1_IF=$(get_interface "Введите имя ПЕРВОГО внутреннего интерфейса (например, ens192)")
-read -p "Введите IP-адрес для $INNER1_IF (например, 172.16.2.2): " IP_INNER1
-read -p "Введите маску для $INNER1_IF (например, 24 или 255.255.255.0): " MASK_INNER1
+read -p "Введите IP-адрес для $INNER1_IF (например, 172.16.1.1): " IP_INNER1
+read -p "Введите маску для $INNER1_IF (например, СМОТРЕТЬ В ЗАДАНИИ): " MASK_INNER1
 CIDR_INNER1=$(mask_to_cidr "$MASK_INNER1")
 if [[ "$CIDR_INNER1" == "0" ]]; then
     echo "Не удалось распознать маску. Используйте CIDR (например, 24)."
     exit 1
 fi
 
-INNER2_IF=$(get_interface "Введите имя ВТОРОГО внутреннего интерфейса (например, ens256 или ens224)")
-read -p "Введите IP-адрес для $INNER2_IF (например, 192.168.1.1): " IP_INNER2
+INNER2_IF=$(get_interface "Введите имя ВТОРОГО внутреннего интерфейса (например, ens224)")
+read -p "Введите IP-адрес для $INNER2_IF (например, 172.16.2.1): " IP_INNER2
 read -p "Введите маску для $INNER2_IF (CIDR, например 25): " MASK_INNER2
 CIDR_INNER2=$(mask_to_cidr "$MASK_INNER2")
 if [[ "$CIDR_INNER2" == "0" ]]; then
