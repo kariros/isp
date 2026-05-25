@@ -28,7 +28,7 @@ echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 echo "✅ Пользователь $ADMIN_USER (UID $ADMIN_UID) создан"
 
 # Добавление прав sudo NOPASSWD напрямую в /etc/sudoers (с проверкой)
-SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL:ALL) NOPASSWD: ALL"
 if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
     echo "$SUDOERS_LINE" >> /etc/sudoers
     if visudo -c &>/dev/null; then
@@ -69,7 +69,7 @@ echo "✅ BIND установлен"
 
 # --- 6. Настройка /etc/named.conf ---
 read -p "Введите внешний DNS-сервер для forwarders (например, 8.8.8.8): " EXT_DNS
-read -p "Введите IP-адрес этого сервера (например, 192.168.2.2): " SRV_IP
+read -p "Введите IP-адрес этого сервера (смотреть ens192 на BR-RTR): " SRV_IP
 
 # Определяем обратную зону по первым трём октетам (для /24)
 REV_OCTETS=$(echo "$SRV_IP" | awk -F. '{print $3"."$2"."$1}')
@@ -138,7 +138,7 @@ zone "$REV_ZONE" {
 EOF
 
 # --- 8. Прямая зона ---
-read -p "Введите имя прямой зоны (например, au-team.irpo или br-team.irpo): " ZONE_NAME
+read -p "Введите имя прямой зоны (например, au-team.irpo ): " ZONE_NAME
 
 cat > /var/named/master/"$ZONE_NAME".db <<EOF
 \$TTL 1D
@@ -154,7 +154,7 @@ EOF
 
 echo "Теперь добавьте дополнительные A-записи (имя хоста и IP). Пустая строка для завершения."
 while true; do
-    read -p "Имя (например, www) и IP (например, $SRV_IP): " name ip
+    read -p "Имя (например, www, hq-rtr и br-rtr ) и IP этих машин (например, $SRV_IP): " name ip
     [ -z "$name" ] && break
     echo "$name    IN A    $ip" >> /var/named/master/"$ZONE_NAME".db
 done
