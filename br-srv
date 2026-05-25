@@ -14,6 +14,16 @@ echo "============================================="
 echo "  Настройка сервера BR-SRV"
 echo "============================================="
 
+# --- 0. Системное имя хоста ---
+read -p "Введите системное имя хоста (например, BR-SRV): " NEW_HOSTNAME
+if [ -n "$NEW_HOSTNAME" ]; then
+    hostnamectl set-hostname "$NEW_HOSTNAME"
+    hostname "$NEW_HOSTNAME"
+    echo "✅ Системное имя хоста установлено: $(hostname)"
+else
+    echo "⚠️ Имя хоста не изменено, оставлено: $(hostname)"
+fi
+
 # --- 1. Создание административного пользователя ---
 read -p "Введите имя административного пользователя (СМОТРЕТЬ В ЗАДАНИИ например, sshuser): " ADMIN_USER
 if [ -z "$ADMIN_USER" ]; then
@@ -204,6 +214,7 @@ fi
 
 echo "============================================="
 echo "  Настройка BR-SRV завершена!"
+echo "  Системное имя хоста: $(hostname)"
 echo "  Администратор: $ADMIN_USER, SSH порт $SSH_PORT"
 echo "  DNS-зона: $ZONE_NAME, IP сервера: $SRV_IP"
 echo "  Проверьте DNS:"
