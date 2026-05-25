@@ -62,13 +62,13 @@ echo "✅ Родительский интерфейс: $PARENT_IF"
 vlan_networks=()
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
-    read -p "Введите ID для VLAN $i: " vlan_id
+    read -p "Введите ID для VLAN $i: СМОТРИТЕ ЗАДАНИЕ" vlan_id
     vlan_iface="$PARENT_IF.$vlan_id"
     if nmcli con show "$vlan_iface" &>/dev/null; then
         echo "⚠️ Профиль $vlan_iface уже существует"
         ip_addr=$(nmcli -g ipv4.addresses con show "$vlan_iface" | head -1)
     else
-        read -p "Введите маску для сети 192.168.$i.1 (CIDR): " mask_vlan
+        read -p "Введите маску для сети 192.168.$i.1 (CIDR) СМОТРИТЕ ЗАДАНИЕ: " mask_vlan
         cidr=$(mask_to_cidr "$mask_vlan")
         ip_addr="192.168.$i.1/$cidr"
         nmcli con add type vlan ifname "$vlan_iface" dev "$PARENT_IF" id "$vlan_id" con-name "$vlan_iface"
