@@ -15,12 +15,12 @@ echo "  Настройка сервера BR-SRV"
 echo "============================================="
 
 # --- 1. Создание административного пользователя ---
-read -p "Введите имя административного пользователя (например, net_admin): " ADMIN_USER
+read -p "Введите имя административного пользователя (СМОТРЕТЬ В ЗАДАНИИ например, sshuser): " ADMIN_USER
 if [ -z "$ADMIN_USER" ]; then
     echo "Имя пользователя не может быть пустым"
     exit 1
 fi
-read -p "Введите UID для $ADMIN_USER: " ADMIN_UID
+read -p "Введите UID (СМОТРЕТЬ В ЗАДАНИИ) для $ADMIN_USER: " ADMIN_UID
 read -sp "Введите пароль для $ADMIN_USER: " ADMIN_PASS
 echo
 useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
@@ -44,7 +44,7 @@ else
 fi
 
 # --- 2. Настройка SSH ---
-read -p "Введите порт для SSH (например, 2222): " SSH_PORT
+read -p "Введите порт для SSH (СМОТРЕТЬ В ЗАДАНИИ например, 2222): " SSH_PORT
 read -p "Введите количество попыток входа MaxAuthTries (например, 3): " SSH_TRIES
 
 sed -i "s/^#Port .*/Port $SSH_PORT/; s/^Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
