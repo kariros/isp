@@ -2,7 +2,7 @@
 
 # =====================================================
 # Настройка сервера BR-SRV (RedOS)
-# Аналог HQ-SRV: пользователь, SSH, SELinux, DNS master
+# Администратор (имя, UID, пароль) + SSH + DNS master
 # =====================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -14,44 +14,60 @@ echo "============================================="
 echo "  Настройка сервера BR-SRV"
 echo "============================================="
 
-# --- 1. Пользователь sshuser ---
-read -p "Введите UID для пользователя sshuser: " USER_UID
-read -sp "Введите пароль для sshuser: " USER_PASS
+# --- 1. Создание административного пользователя ---
+read -p "Введите имя административного пользователя (например, net_admin): " ADMIN_USER
+if [ -z "$ADMIN_USER" ]; then
+    echo "Имя пользователя не может быть пустым"
+    exit 1
+fi
+read -p "Введите UID для $ADMIN_USER: " ADMIN_UID
+read -sp "Введите пароль для $ADMIN_USER: " ADMIN_PASS
 echo
-useradd -u "$USER_UID" -m -s /bin/bash sshuser
-echo "sshuser:$USER_PASS" | chpasswd
-echo "✅ Пользователь sshuser создан (UID $USER_UID)"
+useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
+echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
+echo "✅ Пользователь $ADMIN_USER (UID $ADMIN_UID) создан"
 
-# --- 2. Sudo без пароля ---
-echo "sshuser ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/sshuser
-chmod 440 /etc/sudoers.d/sshuser
-echo "✅ Права sudo добавлены"
+# Добавление прав sudo NOPASSWD напрямую в /etc/sudoers (с проверкой)
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
+    echo "$SUDOERS_LINE" >> /etc/sudoers
+    if visudo -c &>/dev/null; then
+        echo "✅ Права sudo NOPASSWD добавлены в /etc/sudoers"
+    else
+        # Откат
+        sed -i "\$d" /etc/sudoers
+        echo "❌ Ошибка синтаксиса sudoers. Права не добавлены."
+        exit 1
+    fi
+else
+    echo "⚠️ Запись для $ADMIN_USER уже существует в /etc/sudoers"
+fi
 
-# --- 3. Настройка SSH ---
+# --- 2. Настройка SSH ---
 read -p "Введите порт для SSH (например, 2222): " SSH_PORT
 read -p "Введите количество попыток входа MaxAuthTries (например, 3): " SSH_TRIES
 
 sed -i "s/^#Port .*/Port $SSH_PORT/; s/^Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
 sed -i "s/^#MaxAuthTries .*/MaxAuthTries $SSH_TRIES/; s/^MaxAuthTries .*/MaxAuthTries $SSH_TRIES/" /etc/ssh/sshd_config
 sed -i 's/^#Banner .*/Banner \/etc\/ssh\/banner/; s/^Banner .*/Banner \/etc\/ssh\/banner/' /etc/ssh/sshd_config
-echo "AllowUsers sshuser" >> /etc/ssh/sshd_config
+echo "AllowUsers $ADMIN_USER" >> /etc/ssh/sshd_config
 echo "Authorized access only" > /etc/ssh/banner
-echo "✅ SSH настроен: порт $SSH_PORT, MaxAuthTries $SSH_TRIES"
+echo "✅ SSH настроен: порт $SSH_PORT, MaxAuthTries $SSH_TRIES, доступен $ADMIN_USER"
 
-# --- 4. SELinux Permissive ---
+# --- 3. SELinux Permissive ---
 sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
 setenforce 0
 echo "✅ SELinux переведён в permissive"
 
-# --- 5. Перезапуск SSH ---
+# --- 4. Перезапуск SSH ---
 systemctl restart sshd
 systemctl enable sshd
 
-# --- 6. Установка BIND ---
+# --- 5. Установка BIND ---
 dnf install -y bind bind-utils
 echo "✅ BIND установлен"
 
-# --- 7. Настройка /etc/named.conf ---
+# --- 6. Настройка /etc/named.conf ---
 read -p "Введите внешний DNS-сервер для forwarders (например, 8.8.8.8): " EXT_DNS
 read -p "Введите IP-адрес этого сервера (например, 192.168.2.2): " SRV_IP
 
@@ -97,7 +113,7 @@ zone "0.in-addr.arpa" IN {
 };
 EOF
 
-# --- 8. Обратная зона (PTR) ---
+# --- 7. Обратная зона (PTR) ---
 mkdir -p /var/named/master
 cat > /var/named/master/"$REV_ZONE".db <<EOF
 \$TTL 1D
@@ -121,7 +137,7 @@ zone "$REV_ZONE" {
 };
 EOF
 
-# --- 9. Прямая зона ---
+# --- 8. Прямая зона ---
 read -p "Введите имя прямой зоны (например, au-team.irpo или br-team.irpo): " ZONE_NAME
 
 cat > /var/named/master/"$ZONE_NAME".db <<EOF
@@ -151,7 +167,7 @@ zone "$ZONE_NAME" {
 };
 EOF
 
-# --- 10. Проверка конфигурации ---
+# --- 9. Проверка конфигурации ---
 if ! named-checkconf; then
     echo "❌ Ошибка в named.conf. Проверьте синтаксис."
     exit 1
@@ -167,15 +183,15 @@ if ! named-checkzone "$REV_ZONE" /var/named/master/"$REV_ZONE".db; then
     exit 1
 fi
 
-# --- 11. Права на файлы зон ---
+# --- 10. Права на файлы зон ---
 chown root:named /var/named/master/*.db
 chmod 640 /var/named/master/*.db
 
-# --- 12. Настройка DNS клиента на ens160 ---
+# --- 11. Настройка DNS клиента на ens160 ---
 nmcli con mod ens160 ipv4.dns "$SRV_IP $EXT_DNS"
 nmcli con up ens160
 
-# --- 13. Запуск named ---
+# --- 12. Запуск named ---
 systemctl enable named
 systemctl restart named
 
@@ -188,7 +204,7 @@ fi
 
 echo "============================================="
 echo "  Настройка BR-SRV завершена!"
-echo "  Пользователь sshuser, SSH порт $SSH_PORT"
+echo "  Администратор: $ADMIN_USER, SSH порт $SSH_PORT"
 echo "  DNS-зона: $ZONE_NAME, IP сервера: $SRV_IP"
 echo "  Проверьте DNS:"
 echo "    host $ZONE_NAME 127.0.0.1"
