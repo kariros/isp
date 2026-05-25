@@ -69,7 +69,7 @@ echo "→ Внешний интерфейс: $EXT_IF"
 
 # Первый внутренний интерфейс
 INNER1_IF=$(get_interface "Введите имя ПЕРВОГО внутреннего интерфейса (например, ens192)")
-read -p "IP-адрес для $INNER1_IF (например, 172.16.2.2): " IP_INNER1
+read -p "IP-адрес для $INNER1_IF (например, 172.16.1.1): " IP_INNER1
 read -p "Маска (CIDR или точечная): " MASK_INNER1
 CIDR1=$(mask_to_cidr "$MASK_INNER1")
 if [[ "$CIDR1" == "0" ]]; then
@@ -83,8 +83,8 @@ nmcli con up "$INNER1_IF"
 echo "✅ $INNER1_IF настроен"
 
 # Второй внутренний интерфейс
-INNER2_IF=$(get_interface "Введите имя ВТОРОГО внутреннего интерфейса (например, ens256/ens224)")
-read -p "IP-адрес для $INNER2_IF (например, 192.168.1.1): " IP_INNER2
+INNER2_IF=$(get_interface "Введите имя ВТОРОГО внутреннего интерфейса (например,ens224)")
+read -p "IP-адрес для $INNER2_IF (например, 172.16.2.1): " IP_INNER2
 read -p "Маска (CIDR): " MASK_INNER2
 CIDR2=$(mask_to_cidr "$MASK_INNER2")
 if [[ "$CIDR2" == "0" ]]; then
