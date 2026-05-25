@@ -206,7 +206,7 @@ useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
 echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 
 # Добавляем строку в /etc/sudoers, если её ещё нет
-SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL:ALL) NOPASSWD: ALL"
 if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
     # Временно добавляем строку в конец файла
     echo "$SUDOERS_LINE" >> /etc/sudoers
