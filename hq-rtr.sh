@@ -2,7 +2,8 @@
 
 # =====================================================
 # Настройка маршрутизатора HQ-RTR (RedOS)
-# + Пользователь net_admin + DHCP-сервер для HQ-CLI
+# + Пользователь-администратор + DHCP-сервер
+# + Настройки IPv4 required / IPv6 ignore для VLAN
 # =====================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -57,7 +58,7 @@ if [ -z "$PARENT_IF" ]; then
 fi
 echo "✅ Родительский интерфейс: $PARENT_IF"
 
-# --- VLAN ---
+# --- VLAN с настройками IPv4 required / IPv6 ignore ---
 vlan_networks=()
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
@@ -72,9 +73,12 @@ for i in 1 2 3; do
         ip_addr="192.168.$i.1/$cidr"
         nmcli con add type vlan ifname "$vlan_iface" dev "$PARENT_IF" id "$vlan_id" con-name "$vlan_iface"
         nmcli con mod "$vlan_iface" ipv4.addresses "$ip_addr" ipv4.method manual
-        nmcli con up "$vlan_iface"
         echo "✅ VLAN $vlan_iface создан"
     fi
+    # Принудительно устанавливаем параметры IPv4/IPv6
+    nmcli con mod "$vlan_iface" ipv4.may-fail no
+    nmcli con mod "$vlan_iface" ipv6.method ignore
+    nmcli con up "$vlan_iface"
     network=$(ipcalc -n "$ip_addr" | grep Network | awk '{print $2}')
     [ -n "$network" ] && vlan_networks+=("$network area 0")
 done
@@ -189,15 +193,21 @@ fi
 
 # ===================== НОВЫЕ БЛОКИ =====================
 
-# --- Создание пользователя net_admin ---
-echo "--- Создание пользователя для администрирования ---"
-read -p "Введите имя пользователя (по умолчанию net_admin): " ADMIN_USER
-ADMIN_USER=${ADMIN_USER:-net_admin}
-read -sp "Введите пароль для пользователя $ADMIN_USER: " ADMIN_PASS
+# --- Создание административного пользователя (с UID и sudo без пароля) ---
+echo "--- Создание административного пользователя ---"
+read -p "Введите имя пользователя (например, net_admin): " ADMIN_USER
+if [ -z "$ADMIN_USER" ]; then
+    ADMIN_USER="net_admin"
+fi
+read -p "Введите UID для пользователя $ADMIN_USER: " ADMIN_UID
+read -sp "Введите пароль для $ADMIN_USER: " ADMIN_PASS
 echo
-useradd -m -s /bin/bash "$ADMIN_USER"
+useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
 echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
-echo "✅ Пользователь $ADMIN_USER создан"
+# Добавляем права sudo без пароля через отдельный файл (эквивалентно visudo)
+echo "$ADMIN_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/"$ADMIN_USER"
+chmod 440 /etc/sudoers.d/"$ADMIN_USER"
+echo "✅ Пользователь $ADMIN_USER (UID $ADMIN_UID) создан и добавлен в sudoers (NOPASSWD)"
 
 # --- Настройка DHCP-сервера для HQ-CLI ---
 echo "--- Установка и настройка DHCP-сервера ---"
@@ -229,16 +239,13 @@ subnet $dhcp_subnet netmask $dhcp_netmask {
 EOF
 
 # Определяем интерфейс, на котором будет работать DHCP (должен соответствовать подсети)
-# В скрипте уже созданы VLAN, предположим, что для HQ-CLI используется второй VLAN (например, ID 20)
-# Можно запросить у пользователя имя интерфейса, но для автоматизации предложим ввести вручную:
 echo "На каком интерфейсе должен работать DHCP-сервер? (например, $PARENT_IF.20)"
 read -p "Интерфейс: " dhcp_interface
 if ! interface_exists "$dhcp_interface"; then
     echo "⚠️ Интерфейс $dhcp_interface не найден. DHCP может не запуститься."
 fi
 
-# Указываем в настройках DHCP, на каком интерфейсе слушать (по умолчанию все)
-# В /etc/sysconfig/dhcpd можно указать интерфейс
+# Указываем в настройках DHCP, на каком интерфейсе слушать
 echo "DHCPDARGS=\"$dhcp_interface\"" > /etc/sysconfig/dhcpd
 
 # Запуск DHCP-сервера
@@ -256,8 +263,9 @@ echo "============================================="
 echo "  Настройка HQ-RTR завершена!"
 echo "  Имя хоста: $(hostname)"
 echo "  Туннель tun1: 10.0.0.1/30"
-echo "  Создан пользователь: $ADMIN_USER"
+echo "  Создан администратор: $ADMIN_USER (UID $ADMIN_UID, sudo без пароля)"
 echo "  DHCP-сервер настроен для сети $dhcp_subnet/$dhcp_netmask"
+echo "  Для VLAN установлены: IPv4 required, IPv6 ignored"
 echo "  Проверьте OSPF: vtysh -c 'show ip ospf neighbor'"
 echo "  Проверьте DHCP: systemctl status dhcpd"
 echo "============================================="
