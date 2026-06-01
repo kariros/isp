@@ -45,7 +45,7 @@ echo "✅ Hostname: $(hostname)"
 
 # --- 2. Настройка внутреннего интерфейса ens192 (только IP и маска) ---
 echo "--- Настройка интерфейса ens192 ---"
-read -p "Введите IP-адрес для ens192 (например, 192.168.2.2): " IP_ENS192
+read -p "Введите IP-адрес для ens192 (например, 192.168.4.1): " IP_ENS192
 read -p "Введите маску (CIDR, например 25): " MASK_ENS192
 CIDR_ENS192=$(mask_to_cidr "$MASK_ENS192")
 if [[ "$CIDR_ENS192" == "0" ]]; then
@@ -203,7 +203,7 @@ useradd -u "$ADMIN_UID" -m -s /bin/bash "$ADMIN_USER"
 echo "$ADMIN_USER:$ADMIN_PASS" | chpasswd
 
 # Добавляем строку в /etc/sudoers (напрямую, с проверкой синтаксиса)
-SUDOERS_LINE="$ADMIN_USER ALL=(ALL) NOPASSWD: ALL"
+SUDOERS_LINE="$ADMIN_USER ALL=(ALL:ALL) NOPASSWD: ALL"
 if ! grep -Fxq "$SUDOERS_LINE" /etc/sudoers; then
     echo "$SUDOERS_LINE" >> /etc/sudoers
     if visudo -c &>/dev/null; then
