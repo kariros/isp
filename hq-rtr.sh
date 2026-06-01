@@ -62,7 +62,7 @@ echo "✅ Родительский интерфейс: $PARENT_IF"
 vlan_networks=()
 for i in 1 2 3; do
     echo "--- VLAN $i ---"
-    read -p "СМОТРИТЕ ЗАДАНИ!!! Введите ID для VLAN $i: Е" vlan_id
+    read -p "СМОТРИТЕ ЗАДАНИ!!! Введите ID для VLAN $i: " vlan_id
     vlan_iface="$PARENT_IF.$vlan_id"
     if nmcli con show "$vlan_iface" &>/dev/null; then
         echo "⚠️ Профиль $vlan_iface уже существует"
