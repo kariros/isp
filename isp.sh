@@ -83,7 +83,7 @@ nmcli con up "$INNER1_IF"
 echo "✅ $INNER1_IF настроен"
 
 # Второй внутренний интерфейс
-INNER2_IF=$(get_interface "Введите имя ВТОРОГО внутреннего интерфейса (например,ens224)")
+INNER2_IF=$(get_interface "Введите имя ВТОРОГО внутреннего интерфейса (например, ens224)")
 read -p "IP-адрес для $INNER2_IF (например, 172.16.2.1): " IP_INNER2
 read -p "Маска (CIDR): " MASK_INNER2
 CIDR2=$(mask_to_cidr "$MASK_INNER2")
@@ -126,6 +126,30 @@ if systemctl is-active --quiet nftables; then
 else
     echo "❌ Ошибка nftables"
     exit 1
+fi
+
+# ===================== БЛОК ДЛЯ ОТЧЕТА =====================
+echo ""
+read -p "Нужна ли вам помощь с заполнением отчета? (yes/no): " help_report
+if [[ "$help_report" == "yes" || "$help_report" == "y" || "$help_report" == "YES" ]]; then
+    # Здесь вы можете написать любой текст, который будет помещен в файл /etc/banner2
+    REPORT_TEXT="
+===========================================
+   Шпаргалка по настройке ISP
+===========================================
+Внешний интерфейс: ens160
+Внутренние интерфейсы: $INNER1_IF и $INNER2_IF
+IP-адреса: ${IP_INNER1}/${CIDR1} и ${IP_INNER2}/${CIDR2}
+Часовой пояс: Europe/Moscow
+IP-форвардинг: включён
+NAT: настроен через nftables
+===========================================
+Для проверки: nft list ruleset, systemctl status nftables
+"
+    echo "$REPORT_TEXT" > /etc/banner2
+    echo "✅ Файл /etc/banner2 создан с готовым отчётом. Откройте его: nano /etc/banner2"
+else
+    echo "Помощь с отчетом не требуется."
 fi
 
 echo "============================================="
