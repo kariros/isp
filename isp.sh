@@ -148,6 +148,12 @@ nmcli connection modify tun1 ip-tunnel.ttl 64 -> расширение жизни
     VTYSH
 ===========================================
 Во Vtysh ввести команду show ip ospf route, если там есть соседние сети, то всё работает как надо.
+    Если нет тунеля:
+    vtysh
+        configure terminal
+            router ospf
+                passive-interface default
+                network 10.0.0.0/30 area 0
 show ip ospf neighbor в vtysh позволяет увидеть соседний маршрутизатор с настроенной динамической маршрутизацией.
 ===========================================
     SSH
