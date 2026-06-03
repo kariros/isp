@@ -148,7 +148,7 @@ nmcli connection modify tun1 ip-tunnel.ttl 64 -> расширение жизни
     VTYSH
 ===========================================
 Во Vtysh ввести команду show ip ospf route, если там есть соседние сети, то всё работает как надо.
-    Если нет тунеля:
+    Если нет тунеля: 1) проверить наличие тунеля на машине
     vtysh
         configure terminal
             router ospf
