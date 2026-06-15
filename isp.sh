@@ -137,6 +137,10 @@ if [[ "$help_report" == "yes" || "$help_report" == "y" || "$help_report" == "YES
 ===========================================
    Шпаргалка по командам
 ===========================================
+
+DHCP перезагрузить!!
+systemctl restart dhcpd
+
 exec bash -> обновить имя машины
 EDITOR=nano visudo -> перенести root права юзера в середину файла 
 timedatectl -> проверить часовой пояс машины (если не соотв. заданию то писать timedatectl set-timezone Europe/Moscow
